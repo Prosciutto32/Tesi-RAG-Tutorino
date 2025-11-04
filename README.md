@@ -1,6 +1,6 @@
-# Guide to the RAG Tutor
+# Guide to Tutorino
 
-The **RAG Tutor** is a versatile application designed to explore and utilize **Retrieval-Augmented Generation (RAG)**. It features configurable tools for chat and a dedicated interface for managing vector databases.
+The **Tutorino** is a versatile application designed to explore and utilize **Retrieval-Augmented Generation (RAG)**. It features configurable tools for chat and a dedicated interface for managing vector databases.
 
 ---
 
