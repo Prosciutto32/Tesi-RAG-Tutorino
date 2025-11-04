@@ -1,0 +1,9 @@
+.DS_Store
+# Python compilation artifacts
+__pycache__/
+
+# Virtual environment folder
+.venv/
+
+# Custom data folder (assuming this is local data)
+#data/

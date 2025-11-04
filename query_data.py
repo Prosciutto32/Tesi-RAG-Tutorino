@@ -15,7 +15,6 @@ from get_embedding_function import get_embedding_function
 
 
 RELEVANT_CHUNKS = 10
-FIRST_SEMANTIC_RESERCH = 100
 
 
 
@@ -205,9 +204,12 @@ def retriever_keyword_bm25(docs: List[Document]) -> BM25Retriever:
 
 def retriver_ai_keyword(db: Chroma, query_text: str, relevant_chunks: int) -> List[Tuple[Document, float]]:
     print("Performing hybrid search using EnsembleRetriever.")
-
+    # Get all documents from the database
+    all_docs = db.get()
+    
+    # Create the retrievers
     vectorstore_retriever = db.as_retriever(search_kwargs={"k": relevant_chunks})
-    docs = db.similarity_search(query_text, k=FIRST_SEMANTIC_RESERCH)
+    docs = db.similarity_search(query_text, k=len(all_docs['documents']))
     
     bm25_retriever = retriever_keyword_bm25(docs)
     bm25_retriever.k = relevant_chunks
