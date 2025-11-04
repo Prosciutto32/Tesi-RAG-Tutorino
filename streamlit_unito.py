@@ -85,7 +85,7 @@ if app_mode == "RAG Interface":
     query_folder = st.sidebar.selectbox("choose the database you prefer", directories)
 
     search_method = st.sidebar.selectbox("choose the retrieval method you like",
-                                        ["keyword", "semantic", "keyword + semantic"] )
+                                        ["Keyword", "Semantic", "Semantic & Keyword"] )
     num_chunks = st.sidebar.slider("Number of relevant documents to retrieve", min_value=2, max_value=20, value=10)
 
     # User input for prompt

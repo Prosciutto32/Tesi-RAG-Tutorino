@@ -73,13 +73,13 @@ def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, 
     print("embedding andato\n")
     db = Chroma(persist_directory=path, embedding_function=embedding_function) 
     print("Chroma andato\n")
-    if preprocessing == "keyword":
+    if preprocessing == "Keyword":
         final_results = retriver_keyword(db, query_text, relevant_chunks)
         pass
-    elif preprocessing == "semantic":
+    elif preprocessing == "Semantic":
         final_results = retriver_ai(db, query_text, relevant_chunks)
         pass
-    elif preprocessing == "keyword + semantic":
+    elif preprocessing == "Semantic & Keyword":
         final_results = retriver_ai_keyword(db, query_text, relevant_chunks//2)
         pass
     
