@@ -14,11 +14,8 @@ import os
 from get_embedding_function import get_embedding_function
 
 
-RELEVANT_DOCS = 10
+RELEVANT_CHUNKS = 10
 FIRST_SEMANTIC_RESERCH = 100
-THREADS = 4
-
-os.environ["OLLAMA_NUM_THREADS"] = str(THREADS)
 
 
 
@@ -53,7 +50,8 @@ def main():
 
 
 
-def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, chat_history=[], preprocessing = "keyword + AI"):
+def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, chat_history=[], preprocessing = "keyword + AI", relevant_chunks = RELEVANT_CHUNKS):
+    start = time.time()  # record start time
     model= get_model(model_type)
     history_string = ""
     for message in chat_history:
@@ -77,13 +75,13 @@ def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, 
     db = Chroma(persist_directory=path, embedding_function=embedding_function) 
     print("Chroma andato\n")
     if preprocessing == "keyword":
-        final_results = retriver_keyword(db, query_text)
+        final_results = retriver_keyword(db, query_text, relevant_chunks)
         pass
     elif preprocessing == "semantic":
-        final_results = retriver_ai(db, query_text)
+        final_results = retriver_ai(db, query_text, relevant_chunks)
         pass
     elif preprocessing == "keyword + semantic":
-        final_results = retriver_ai_keyword(db, query_text)
+        final_results = retriver_ai_keyword(db, query_text, relevant_chunks//2)
         pass
     
 
@@ -105,15 +103,11 @@ def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, 
     print("invocazione modello\n")
     # model = OllamaLLM(model=model_type)
     print("domanda inviata\n")
-    start = time.time()  # record start time
     response = ollama.chat(
         model=model_type, 
         messages=[{"role": "user", "content": prompt}]
     )
-    end = time.time()
     response_text = response["message"]["content"]
-    print(f"Time taken: {end - start:.2f} seconds")
-    formatted_time_taken = f"\nTime taken: {end - start:.2f} seconds"
     #response_text = model.invoke(prompt)
     print("risposta ottenuta\n")
 
@@ -136,10 +130,8 @@ def query_rag(path, query_text: str, model_type: str, preprompt = defpreprompt, 
         formatted_sources += f"- ID: {source['id']}\n"
         #formatted_sources += f"  Keywords: {source['keywords']}\n"
     
-    formatted_response = f"{response_text}\n{formatted_time_taken}\n{formatted_sources}"
-    print(formatted_response)
-    
-    return formatted_response
+    end = time.time()
+    return response_text, round(end - start, 2), formatted_sources
 
 def get_model(model_type: str):
     return OllamaLLM(model=model_type)
@@ -147,11 +139,11 @@ def get_model(model_type: str):
 if __name__ == "__main__":
     main()
 
-def retriver_keyword ( db, query_text: str):
+def retriver_keyword ( db, query_text: str, relevant_chunks: int):
     print("only keyword")
     r = Rake()
     r.extract_keywords_from_text(query_text)
-    query_keywords = r.get_ranked_phrases()[:5]
+    query_keywords = r.get_ranked_phrases()
     print(f"Extracted keywords from query: {query_keywords}")
     if not query_keywords:
         print("No keywords extracted from the query. Cannot perform keyword-based search.")
@@ -164,8 +156,7 @@ def retriver_keyword ( db, query_text: str):
     try: #ponte H
 
         results = db.get(
-            where_document=keyword_filter,
-            limit=RELEVANT_DOCS  
+            where_document=keyword_filter
         )
 
         documents_with_scores = []
@@ -194,43 +185,42 @@ def retriver_keyword ( db, query_text: str):
             documents_with_scores.append((doc_obj, scores[i]))
             
         documents_with_scores.sort(key=lambda item: item[1], reverse=True)
-            
-        
-        return documents_with_scores[:RELEVANT_DOCS]
-        
+
+
+        return documents_with_scores[:relevant_chunks]
+
 
     except Exception as e: # riprova con il ponte H
         print(f"Error during keyword-only search: {e}")
         return []
 
 
-def retriver_ai (db, query_text: str):
+def retriver_ai (db, query_text: str, relevant_chunks: int):
     print("only semantic")
-    return db.similarity_search_with_score(query_text, k=RELEVANT_DOCS)
+    return db.similarity_search_with_score(query_text, k=relevant_chunks)
 
 def retriever_keyword_bm25(docs: List[Document]) -> BM25Retriever:
     """Creates a BM25 retriever from a list of documents."""
     return BM25Retriever.from_documents(docs)
 
-def retriver_ai_keyword(db: Chroma, query_text: str, k: int = RELEVANT_DOCS) -> List[Tuple[Document, float]]:
+def retriver_ai_keyword(db: Chroma, query_text: str, relevant_chunks: int) -> List[Tuple[Document, float]]:
     print("Performing hybrid search using EnsembleRetriever.")
-    
 
-    vectorstore_retriever = db.as_retriever(search_kwargs={"k": k})
+    vectorstore_retriever = db.as_retriever(search_kwargs={"k": relevant_chunks})
     docs = db.similarity_search(query_text, k=FIRST_SEMANTIC_RESERCH)
     
     bm25_retriever = retriever_keyword_bm25(docs)
-    bm25_retriever.k = k
-    
+    bm25_retriever.k = relevant_chunks
+
     # 3. Create the EnsembleRetriever
     ensemble_retriever = EnsembleRetriever(
         retrievers=[bm25_retriever, vectorstore_retriever],
         weights=[0.5, 0.5]  # You can adjust the weights for each retriever
     )
-    
-    relevant_docs = ensemble_retriever.get_relevant_documents(query_text)
 
-    documents_with_scores = [(doc, 1.0) for doc in relevant_docs]
-    
-    print(f"Found {len(documents_with_scores)} documents via hybrid search.")
+    found_relevant_chunks = ensemble_retriever.get_relevant_documents(query_text)
+
+    documents_with_scores = [(doc, 1.0) for doc in found_relevant_chunks]
+
+    print(f"Found {len(documents_with_scores)} chunks via hybrid search.")
     return documents_with_scores

@@ -1,3 +1,5 @@
+import csv
+from io import StringIO
 import os
 import queue
 import threading
@@ -6,6 +8,11 @@ from pathlib import Path
 from populate_database import clear_database
 from populate_database import main as populate
 from query_data import query_rag 
+
+chat_models = ["llama3.2","cogito:3b","qwen2.5:3b","granite3.3", "all-questions"]
+embedding_models = ["mxbai-embed-large","ryanshillington/Qwen3-Embedding-0.6B","qwen3-embedding:8b ","embeddinggemma"]
+
+
 
 def reset_preprompt_callback():
     st.session_state.current_preprompt = st.session_state.default_preprompt
@@ -23,7 +30,7 @@ if "embedding_function" not in st.session_state:
     st.session_state.embedding_function = "mxbai-embed-large"
 
 # Streamlit App Title
-st.title("AI Scholar: Your Intelligent Academic Assistant")
+st.title("Tutorino")
 
 # Sidebar for navigation
 app_mode = st.sidebar.radio("Choose section", ["RAG Interface", "Database Management"])
@@ -32,7 +39,7 @@ def database_form():
     dir_name = st.text_input("Database Name")
     st.selectbox(
         "selezionare la funzione di embedding che si desidera utilizzare",
-        ("mxbai-embed-large","ryanshillington/Qwen3-Embedding-0.6B","embeddinggemma"),
+        embedding_models,
         key="embedding_function"
     )
     if st.button("Submit"):
@@ -62,13 +69,12 @@ if app_mode == "RAG Interface":
     )
     st.sidebar.button("Reset Prompt", on_click=reset_preprompt_callback)
 
-    chat_models = ["llama3.2","cogito:3b","alibayram/smollm3", "all"]
     # Model selection in the sidebar
     model_type = st.sidebar.selectbox(
         "Pick the model you want to use",
-        embedding_models
+        chat_models
     )
-
+    save_log = st.sidebar.checkbox("Save log to CSV", value=True)
     history_length = st.sidebar.slider("Number of history messages to use", min_value=2, max_value=7, value=4)
 
     directories = [
@@ -76,19 +82,20 @@ if app_mode == "RAG Interface":
         if os.path.isdir("data/"+d) and (d.endswith("_chroma") )
     ]
 
-    QUERY_FOLDER = st.sidebar.selectbox("choose the database you prefer", directories)
+    query_folder = st.sidebar.selectbox("choose the database you prefer", directories)
 
-    PREPOCESSING = st.sidebar.selectbox("choose the preprocessing method you like",
-                                        ["keyword", "semantic", "keyword + semantic", "all"] )
+    search_method = st.sidebar.selectbox("choose the retrieval method you like",
+                                        ["keyword", "semantic", "keyword + semantic"] )
+    num_chunks = st.sidebar.slider("Number of relevant documents to retrieve", min_value=2, max_value=20, value=10)
 
     # User input for prompt
-    if prompt := st.chat_input("Ask your question"):
+    if question := st.chat_input("Ask your question"):
         # Aggiungi la domanda dell'utente alla cronologia
-        st.session_state.messages.append({"role": "user", "content": prompt})
+        st.session_state.messages.append({"role": "user", "content": question})
 
         # Visualizza la domanda
         with st.chat_message("user"):
-            st.markdown(prompt)
+            st.markdown(question)
 
         if len(st.session_state.messages) > history_length*2:
             history_for_rag = st.session_state.messages[-history_length*2:]
@@ -97,297 +104,188 @@ if app_mode == "RAG Interface":
                 history_for_rag =[]
             else:
                 history_for_rag = st.session_state.messages
-        if (model_type == "all" and PREPOCESSING == "all"):
-            with st.chat_message("user"):
-                    st.markdown("Ciao User")
-            with st.chat_message("assistant"):
-                st.markdown("Ciao Assistant")
-            with st.spinner("Processing your request, please wait about 3h 30m..."):
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Domanda: "+ prompt)
-                    f.write("\n")
+        CHAT_MODEL ="qwen2.5:3b"  
+        DEFAULT_VOTE = 0
+        NCHUNK = 10
+        questionnum = 0
+        LOG_FILE_PATH = "Risposte_ottenute.csv"   
+        if  model_type == "all-questions":
+            output = StringIO()
+            writer = csv.writer(output, delimiter=';', quoting=csv.QUOTE_MINIMAL)
+        # 1. Write Header
+            header = [
+                "Question Number",
+                "Query Type",
+                "Embedd Model",
+                "Chat Model",
+                "Response",
+                "Response_time",
+                "Sources",
+                "My Vote",
+                "Gemini Vote",
+                "Paganelli/Forti Vote"
+            ]
+            writer.writerow(header)
+            for question in [
+                "Describe the main differences between the TCP and UDP transport protocols, including appropriate examples of their use.",
+                "Describe the TCP three-way handshake; explain which segments are exchanged between the client and server to bring them both to the established connection state (ESTABLISHED)",
+                "Briefly describe the AIMD congestion control mechanism during the Congestion Avoidance phase implemented in TCP Reno and explain how this mechanism is combined with flow control to determine the actual amount of data the sender can transmit.",
+                "Compare GBN (Go-Back-N), SR (Selective Repeat), and TCP (without delayed ACKs). Assume that the timeout values for all three protocols are sufficiently large such that five consecutive data segments and their corresponding ACKs can be received (if not lost in the channel) by the receiving host (Host B) and the sending host (Host A) respectively. Suppose Host A sends five data segments to Host B and the second segment (sent by A) is lost. In the end, all 5 data segments have been correctly received by Host B.(a) How many segments did Host A send in total and how many ACKs did Host B send in total? What are their sequence numbers? Answer these questions for all three protocols. (b) If the timeout values for all three protocols are much greater than 5 RTT, which protocol will successfully deliver all five data segments in the shortest time interval?",
+                "A client C has established a TCP connection with a web server S to download a web page consisting of three objects. At time t, immediately after sending the request for the third object, Host C sends Host S a segment with the FIN=1 flag.Considering TCP Reno, also indicate the value of the congestion window and threshold at each RTT, and calculate the time in seconds required to transfer the file under the two assumptions:a) The transmission occurs without losses.b) Segment no. 37 is lost, the subsequently transmitted segments are successfully transferred.Assume t_0 =0 ms is the instant when the file transfer begins (the first interval is therefore 0-1 RTT).",
+                "Answer true or false and justify your answer with an example. In SR, can the sender receive an ACK related to a packet that falls outside its current window? In GBN, can the sender receive an ACK related to a packet that falls outside its current window? The Stop-and-Wait protocol is the same as the SR protocol with a window size equal to 1. The Stop-and-Wait protocol is the same as the GBN protocol with a window size equal to 1. 3 bytes. When TCP is in the CA phase, approximate the value of the congestion window by considering a linear increase of the window for each RTT. Assume the connection has just been established and neglect the time required for the handshake. For simplicity, assume the receive window value (Rwnd) is constant over time.",
+                "What are the key functionalities of the Transport Layer in the OSI model, and how do they ensure efficient data delivery?",
+                "Explain the purpose of TCP's Sliding Window mechanism and how it differs from the Selective Repeat protocol.",
+                "Describe the key fields and their purpose in the UDP header and explain why the pseudo-header is necessary for the UDP checksum calculation.",
+                "Explain the concepts of transport-layer multiplexing and demultiplexing, indicating what information is used to perform demultiplexing in UDP and TCP."
+                ]:
 
-                risposta_qwen_semantic_llama = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "llama3.2", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Qwen - Semantic\n")
-                    f.write(risposta_qwen_semantic_llama)
-                risposta_qwen_keyword_llama = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Qwen - Keyword\n")
-                    f.write(risposta_qwen_keyword_llama)
-                risposta_qwen_semantic_keyword_llama = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Qwen - Semantic_Keyword\n")
-                    f.write(risposta_qwen_semantic_keyword_llama)
-
-
-                risposta_mxbai_semantic_llama = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "llama3.2", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Mxbai - Semantic\n")
-                    f.write(risposta_mxbai_semantic_llama)
-                risposta_mxbai_keyword_llama = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Mxbai - Keyword\n")
-                    f.write(risposta_mxbai_keyword_llama)
-                risposta_mxbai_semantic_keyword_llama = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Mxbai - Semantic_Keyword\n")
-                    f.write(risposta_mxbai_semantic_keyword_llama)
-
-
-                risposta_gemma_semantic_llama = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "llama3.2", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Gemma - Semantic\n")
-                    f.write(risposta_gemma_semantic_llama)
-                risposta_gemma_keyword_llama = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Gemma - Keyword\n")
-                    f.write(risposta_gemma_keyword_llama)
-                risposta_gemma_semantic_keyword_llama = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "llama3.2", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Llama 3.2 - Gemma - Semantic_Keyword\n")
-                    f.write(risposta_gemma_semantic_keyword_llama)
-
-
-
-
-                risposta_qwen_semantic_cogito = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Qwen - Semantic\n")
-                    f.write(risposta_qwen_semantic_cogito)
-                risposta_qwen_keyword_cogito = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Qwen - Keyword\n")
-                    f.write(risposta_qwen_keyword_cogito)
-                risposta_qwen_semantic_keyword_cogito = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Qwen - Semantic_Keyword\n")
-                    f.write(risposta_qwen_semantic_keyword_cogito)
-
-
-                risposta_mxbai_semantic_cogito = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Mxbai - Semantic\n")
-                    f.write(risposta_mxbai_semantic_cogito)
-                risposta_mxbai_keyword_cogito  = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Mxbai - Keyword\n")
-                    f.write(risposta_mxbai_keyword_cogito)
-                risposta_mxbai_semantic_keyword_cogito = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Mxbai - Semantic_Keyword\n")
-                    f.write(risposta_mxbai_semantic_keyword_cogito)
-
-
-                risposta_gemma_semantic_cogito = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Gemma - Semantic\n")
-                    f.write(risposta_gemma_semantic_cogito)
-                risposta_gemma_keyword_cogito  = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Gemma - Keyword\n")
-                    f.write(risposta_gemma_keyword_cogito)
-                risposta_gemma_semantic_keyword_cogito = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "cogito:3b", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Cogito - Gemma - Semantic_Keyword\n")
-                    f.write(risposta_gemma_semantic_keyword_cogito)
-
-
+                questionnum += 1
                 
+                testo_qwen_keyword_model, time_qwen_keyword_model, sources_qwen_keyword_model = query_rag("data/"+"Transport_Qwen_8b_chroma", question, CHAT_MODEL, preprompt,[], "keyword",NCHUNK )
+                testo_qwen_semantic_model, time_qwen_semantic_model, sources_qwen_semantic_model = query_rag("data/"+"Transport_Qwen_8b_chroma", question, CHAT_MODEL, preprompt,[], "semantic",NCHUNK )
+                testo_qwen_semantic_keyword_model, time_qwen_semantic_keyword_model, sources_qwen_semantic_keyword_model = query_rag("data/"+"Transport_Qwen_8b_chroma", question, CHAT_MODEL, preprompt,[], "keyword + semantic",NCHUNK )
+                print("Qwen ended")
 
-                risposta_qwen_semantic_smollm = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Qwen - Semantic \n")
-                    f.write(risposta_qwen_semantic_smollm)
-                risposta_qwen_keyword_smollm = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Qwen - Keyword \n")
-                    f.write(risposta_qwen_keyword_smollm)
-                risposta_qwen_semantic_keyword_smollm = query_rag("data/"+"Transport_Mixed_Qwen_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Qwen - Semantic_Keyword\n")
-                    f.write(risposta_qwen_semantic_keyword_smollm)
+                testo_mxbai_keyword_model, time_mxbai_keyword_model, sources_mxbai_keyword_model = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", question, CHAT_MODEL, preprompt,[], "keyword",NCHUNK )
+                testo_mxbai_semantic_model, time_mxbai_semantic_model, sources_mxbai_semantic_model = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", question, CHAT_MODEL, preprompt,[], "semantic",NCHUNK )
+                testo_mxbai_semantic_keyword_model, time_mxbai_semantic_keyword_model, sources_mxbai_semantic_keyword_model = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", question, CHAT_MODEL, preprompt,[], "keyword + semantic",NCHUNK )
+                print("Mxbai ended")
 
+                testo_gemma_keyword_model, time_gemma_keyword_model, sources_gemma_keyword_model = query_rag("data/"+"Transport_Mixed_Gemma_chroma", question, CHAT_MODEL, preprompt,[], "keyword",NCHUNK )
+                testo_gemma_semantic_model, time_gemma_semantic_model, sources_gemma_semantic_model = query_rag("data/"+"Transport_Mixed_Gemma_chroma", question, CHAT_MODEL, preprompt,[], "semantic",NCHUNK )
+                testo_gemma_semantic_keyword_model, time_gemma_semantic_keyword_model, sources_gemma_semantic_keyword_model = query_rag("data/"+"Transport_Mixed_Gemma_chroma", question, CHAT_MODEL, preprompt,[], "keyword + semantic",NCHUNK )
+                print("Gemma ended")
 
-                risposta_mxbai_semantic_smollm = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Mxbai - Semantic\n")
-                    f.write(risposta_mxbai_semantic_smollm)
-                risposta_mxbai_keyword_smollm  = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Mxbai - Keyword\n")
-                    f.write(risposta_mxbai_keyword_smollm)
-                risposta_mxbai_semantic_keyword_smollm = query_rag("data/"+"Transport_Mixed_Mxbai_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Mxbai - Semantic_Keyword\n")
-                    f.write(risposta_mxbai_semantic_keyword_smollm)
+                log_entries = [
+                    ("Qwen", "Keyword", testo_qwen_keyword_model.replace("\n", " "), time_qwen_keyword_model, sources_qwen_keyword_model.replace("\n", " ")),
+                    ("Qwen", "Semantic", testo_qwen_semantic_model.replace("\n", " "), time_qwen_semantic_model, sources_qwen_semantic_model.replace("\n", " ")),
+                    ("Qwen", "Semantic & Keyword", testo_qwen_semantic_keyword_model.replace("\n", " "), time_qwen_semantic_keyword_model, sources_qwen_semantic_keyword_model.replace("\n", " ")),
 
+                    ("Mxbai", "Keyword", testo_mxbai_keyword_model.replace("\n", " "), time_mxbai_keyword_model, sources_mxbai_keyword_model.replace("\n", " ")),
+                    ("Mxbai", "Semantic", testo_mxbai_semantic_model.replace("\n", " "), time_mxbai_semantic_model, sources_mxbai_semantic_model.replace("\n", " ")),
+                    ("Mxbai", "Semantic & Keyword", testo_mxbai_semantic_keyword_model.replace("\n", " "), time_mxbai_semantic_keyword_model, sources_mxbai_semantic_keyword_model.replace("\n", " ")),
 
-                risposta_gemma_semantic_smollm  = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Gemma - Semantic\n")
-                    f.write(risposta_gemma_semantic_smollm)
-                risposta_gemma_keyword_smollm  = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Gemma - Keyword\n")
-                    f.write(risposta_gemma_keyword_smollm)
-                risposta_gemma_semantic_keyword_smollm = query_rag("data/"+"Transport_Mixed_Gemma_chroma", prompt, "alibayram/smollm3", preprompt, history_for_rag, "keyword + semantic")
-                with open("Risposte_ottenute", "a") as f:
-                    f.write("Smollm - Gemma - Semantic_Keyword\n")
-                    f.write(risposta_gemma_semantic_keyword_cogito)
+                    ("Gemma", "Keyword", testo_gemma_keyword_model.replace("\n", " "), time_gemma_keyword_model, sources_gemma_keyword_model.replace("\n", " ")),
+                    ("Gemma", "Semantic", testo_gemma_semantic_model.replace("\n", " "), time_gemma_semantic_model, sources_gemma_semantic_model.replace("\n", " ")),
+                    ("Gemma", "Semantic & Keyword", testo_gemma_semantic_keyword_model.replace("\n", " "), time_gemma_semantic_keyword_model, sources_gemma_semantic_keyword_model.replace("\n", " ")),
+                ]
 
+                # --- CSV Generation ---
+                # 2. Write Data Rows
+                for embed_model, query_type, response_text, response_time, response_sources in log_entries:
+                    row = [
+                        questionnum,
+                        query_type,
+                        embed_model,
+                        CHAT_MODEL,
+                        response_text,
+                        response_time,
+                        response_sources,
+                        DEFAULT_VOTE,
+                        DEFAULT_VOTE,
+                        DEFAULT_VOTE
+                    ]
+                    # Writing the row ensures the 'Response' field is correctly quoted
+                    # if it contains semicolons, maintaining the CSV integrity.
+                    writer.writerow(row)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Qwen - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_llama)
+                # Get the final CSV string
+                final_csv_content = output.getvalue().strip()
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Qwen - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_keyword_llama)
+                # In a real environment, you would save this string to the file
+                with open(LOG_FILE_PATH, 'w') as f:
+                     f.write(final_csv_content)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Qwen - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_keyword_llama)
+                print(f"--- Generated Content for {LOG_FILE_PATH} ---")
+                print(final_csv_content)
+                print("---------------------------------------------")
+                formatted_time_taken = f"\nTime taken: {time_qwen_keyword_model} seconds"
+                risposta_qwen_keyword_model = f"{testo_qwen_keyword_model}\n{formatted_time_taken}\n{sources_qwen_keyword_model}"
+                print(risposta_qwen_keyword_model)
+                formatted_time_taken = f"\nTime taken: {time_qwen_semantic_model} seconds"
+                risposta_qwen_semantic_model = f"{testo_qwen_semantic_model}\n{formatted_time_taken}\n{sources_qwen_semantic_model}"
+                print(risposta_qwen_semantic_model)
+                formatted_time_taken = f"\nTime taken: {time_qwen_semantic_keyword_model} seconds"
+                risposta_qwen_semantic_keyword_model = f"{testo_qwen_semantic_keyword_model}\n{formatted_time_taken}\n{sources_qwen_semantic_keyword_model}"
+                print(risposta_qwen_semantic_keyword_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Qwen - Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_qwen_keyword_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Qwen - Semantic")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_qwen_semantic_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Qwen - Semantic_Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_qwen_semantic_keyword_model)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Mxbai - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_llama)
+                formatted_time_taken = f"\nTime taken: {time_mxbai_keyword_model} seconds"
+                risposta_mxbai_keyword_model = f"{testo_mxbai_keyword_model}\n{formatted_time_taken}\n{sources_mxbai_keyword_model}"
+                print(risposta_mxbai_keyword_model)
+                formatted_time_taken = f"\nTime taken: {time_mxbai_semantic_model} seconds"
+                risposta_mxbai_semantic_model = f"{testo_mxbai_semantic_model}\n{formatted_time_taken}\n{sources_mxbai_semantic_model}"
+                print(risposta_mxbai_semantic_model)
+                formatted_time_taken = f"\nTime taken: {time_mxbai_semantic_keyword_model} seconds"
+                risposta_mxbai_semantic_keyword_model = f"{testo_mxbai_semantic_keyword_model}\n{formatted_time_taken}\n{sources_mxbai_semantic_keyword_model}"
+                print(risposta_mxbai_semantic_keyword_model)
+                formatted_time_taken = f"\nTime taken: {time_gemma_keyword_model} seconds"
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Mxbai - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_keyword_llama)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Mxbai - Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_mxbai_keyword_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Mxbai - Semantic")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_mxbai_semantic_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Mxbai - Semantic_Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_mxbai_semantic_keyword_model)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Mxbai - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_keyword_llama)
-            
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Gemma - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_llama)
+                formatted_time_taken = f"\nTime taken: {time_gemma_keyword_model} seconds"
+                risposta_gemma_keyword_model = f"{testo_gemma_keyword_model}\n{formatted_time_taken}\n{sources_gemma_keyword_model}"
+                print(risposta_gemma_keyword_model)
+                formatted_time_taken = f"\nTime taken: {time_gemma_semantic_model} seconds"
+                risposta_gemma_semantic_model = f"{testo_gemma_semantic_model}\n{formatted_time_taken}\n{sources_gemma_semantic_model}"
+                print(risposta_gemma_semantic_model)
+                formatted_time_taken = f"\nTime taken: {time_gemma_semantic_keyword_model} seconds"
+                risposta_gemma_semantic_keyword_model = f"{testo_gemma_semantic_keyword_model}\n{formatted_time_taken}\n{sources_gemma_semantic_keyword_model}"
+                print(risposta_gemma_semantic_keyword_model)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Gemma - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_keyword_llama)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Gemma - Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_gemma_keyword_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL}  - Gemma - Semantic")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_gemma_semantic_model)
+                with st.chat_message("user"):
+                    st.markdown(f"{CHAT_MODEL} - Gemma - Semantic_Keyword")
+                with st.chat_message("assistant"):
+                    st.markdown(risposta_gemma_semantic_keyword_model)
 
-            with st.chat_message("user"):
-                st.markdown("Llama 3.2 - Gemma - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_keyword_llama)
-            
-            with st.chat_message("user"):
-                st.markdown("Cogito - Qwen - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Qwen - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_keyword_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Qwen - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_keyword_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Mxbai - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Mxbai - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_keyword_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Mxbai - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_keyword_cogito)
-            
-            with st.chat_message("user"):
-                st.markdown("Cogito - Gemma - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Gemma - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_keyword_cogito)
-
-            with st.chat_message("user"):
-                st.markdown("Cogito - Gemma - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_keyword_cogito)
-            
-            
-            
-            with st.chat_message("user"):
-                st.markdown("Smollm - Qwen - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Qwen - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_keyword_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Qwen - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_qwen_semantic_keyword_smollm)
-
-
-
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Mxbai - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Mxbai - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_keyword_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Mxbai - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_mxbai_semantic_keyword_smollm)
-            
-
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Gemma - Semantic")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Gemma - Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_keyword_smollm)
-
-            with st.chat_message("user"):
-                st.markdown("Smollm - Gemma - Semantic_Keyword")
-            with st.chat_message("assistant"):
-                st.markdown(risposta_gemma_semantic_keyword_smollm)
-
-            
-            
 
         else:
             with st.spinner("Processing your request, please wait..."):
-                
+                testo, tempo, sources = query_rag("data/"+query_folder, question, model_type, preprompt, history_for_rag, search_method, num_chunks)
+            formatted_time_taken = f"\nTime taken: {tempo} seconds"
+            risposta = f"{testo}\n{formatted_time_taken}\n{sources}"
 
-                risposta = query_rag("data/"+QUERY_FOLDER, prompt, model_type, preprompt, history_for_rag, PREPOCESSING)
-
+            # if save to domanda_log.csv
+            if save_log:
+                LOG_FILE_PATH = "logs/domanda_log.csv"
+                file_exists = os.path.isfile(LOG_FILE_PATH)
+                with open(LOG_FILE_PATH, mode='a', newline='') as file:
+                    writer = csv.writer(file, delimiter=';')
+                    if not file_exists:
+                        # Write header if file does not exist
+                        writer.writerow(["Question", "Model", "DB_Used", "Search Method", "Prompt", "Response", "Time Taken", "Sources"])
+                    # Write the data row separated by semicolons
+                    writer.writerow([question.replace("\n", " ").replace(";", ","), model_type.replace("\n", " ").replace(";", ","), query_folder.replace("\n", " ").replace(";", ","), search_method.replace("\n", " ").replace(";", ","), preprompt.replace("\n", " ").replace(";", ","), testo.replace("\n", " ").replace(";", ","), tempo, sources.replace("\n", " ").replace(";", ",")])
 
             # Visualizza la risposta del modello
             with st.chat_message("assistant"):
